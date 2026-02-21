@@ -56,14 +56,16 @@ def send_line_notify(message):
         'message': message
     }
     
-    # 讀取代理伺服器設定
+    # 讀取代理伺服器設定 (若是 GitHub Actions 雲端環境則不要使用 proxy)
     proxies = {}
-    http_proxy = os.getenv("HTTP_PROXY", "")
-    https_proxy = os.getenv("HTTPS_PROXY", "")
-    if http_proxy:
-        proxies['http'] = http_proxy
-    if https_proxy:
-        proxies['https'] = https_proxy
+    if os.getenv("RUN_ONCE") != "true":
+        http_proxy = os.getenv("HTTP_PROXY", "")
+        https_proxy = os.getenv("HTTPS_PROXY", "")
+        if http_proxy:
+            proxies['http'] = http_proxy
+        if https_proxy:
+            proxies['https'] = https_proxy
+
         
     try:
         response = requests.post(url, headers=headers, data=data, proxies=proxies if proxies else None)
