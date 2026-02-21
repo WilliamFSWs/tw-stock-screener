@@ -27,5 +27,3 @@ jobs:
           LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
           RUN_ONCE: 'true'
         run: python main.py
-                                                                            run: python main.py
-                                                                                                                                            
