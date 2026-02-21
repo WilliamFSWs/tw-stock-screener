@@ -1,0 +1,18 @@
+name: Screener
+on:
+  schedule:
+      - cron: '30 1,2,3,4,5 * * 1-5'
+        workflow_dispatch:
+        jobs:
+          run-screener:
+              runs-on: ubuntu-latest
+                  steps:
+                        - uses: actions/checkout@v2
+                              - uses: actions/setup-python@v2
+                                      with:
+                                                python-version: '3.9'
+                                                      - run: pip install -r requirements.txt
+                                                            - env:
+                                                                      LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
+                                                                                RUN_ONCE: 'true'
+                                                                                        run: python main.py
