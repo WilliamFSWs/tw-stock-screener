@@ -1,8 +1,11 @@
 name: Screener
-on: push
+on: [push, workflow_dispatch]
 jobs:
   run:
       runs-on: ubuntu-latest
           steps:
-                - uses: actions/checkout@v2
+                - uses: actions/checkout@v4
                       - run: python main.py
+                              env:
+                                        LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
+                                        
