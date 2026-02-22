@@ -121,11 +121,19 @@ def add_features(df):
     # 前一日量
     d["prev_volume"] = d["volume"].shift(1)
 
-    # 7日後最高價 & 收盤價（用於計算勝率）
+    # 使用 D+1 買入邏輯 (更符合實際操作與使用者要求)
+    d["entry_buy_price"] = d["open"].shift(-1)  # 假設 D+1 開盤買入
+    
+    # 過濾條件: 如果 D+1 開盤價 > D+0 收盤價 (跳空向上)，則不計入回測 (不算數)
+    d["can_enter"] = d["entry_buy_price"] <= d["close"]
+    
+    # 7日後最高價 & 收盤價（從 D+1 起算 7 個交易日）
     d["future_max_7d"] = d["high"].shift(-1).rolling(7).max().shift(-6)
     d["future_close_7d"] = d["close"].shift(-7)
-    d["future_return_7d"] = (d["future_close_7d"] - d["close"]) / d["close"]
-    d["future_max_return_7d"] = (d["future_max_7d"] - d["close"]) / d["close"]
+    
+    # 計算報酬率 (以 D+1 的買入價為分母)
+    d["future_return_7d"] = (d["future_close_7d"] - d["entry_buy_price"]) / d["entry_buy_price"]
+    d["future_max_return_7d"] = (d["future_max_7d"] - d["entry_buy_price"]) / d["entry_buy_price"]
 
     return d.dropna(subset=["ma20", "vol_ma20", "rsi14"])
 
@@ -295,8 +303,8 @@ def backtest_pattern(df, pattern_func, pattern_name):
     d = df.copy()
     signals = pattern_func(d)
 
-    # 確保有 future 資料可算
-    valid = signals & d["future_max_7d"].notna() & d["future_close_7d"].notna()
+    # 確保有 future 資料且符合「非跳空向上」的買入條件 (D+1 Open <= D+0 Close)
+    valid = signals & d["can_enter"] & d["future_max_7d"].notna() & d["future_close_7d"].notna()
     signal_dates = d[valid].index
 
     if len(signal_dates) == 0:
