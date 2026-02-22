@@ -2,18 +2,20 @@ name: TW Stock Screener Hourly
 
 on:
   schedule:
+    # 台灣時間 09:30, 10:30, 11:30, 12:30, 13:30 (週一至週五)
+    # 轉換為 UTC 時間 (UTC+0): 01:30, 02:30, 03:30, 04:30, 05:30
     - cron: '30 1,2,3,4,5 * * 1-5'
-  workflow_dispatch:
+  workflow_dispatch: # 允許手動從 GitHub 介面啟動
 
 jobs:
-  screen:
+  run-screener:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
           python-version: '3.12'
 
@@ -22,9 +24,8 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run stock screener
+      - name: Run Stock Screener
         env:
-          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
-          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
-          RUN_ONCE: 'true'
+          LINE_TOKEN: ${{ secrets.LINE_TOKEN }}
+          RUN_ONCE: "true"
         run: python main.py

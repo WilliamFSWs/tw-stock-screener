@@ -1,0 +1,50 @@
+name: Daily Stock Scanner
+
+on:
+  schedule:
+    # 每天台灣時間 09:05 執行 (UTC 01:05) — 下午開盤前掃描
+    - cron: '5 1 * * 1-5'
+    # 每天台灣時間 15:30 執行 (UTC 07:30) — 收盤後掃描
+    - cron: '30 7 * * 1-5'
+  workflow_dispatch: # 支援手動觸發
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Google Chrome
+        run: |
+          wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+          sudo sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list'
+          sudo apt-get update
+          sudo apt-get install google-chrome-stable
+
+      - name: Run Daily Scanner
+        env:
+          LINE_CHANNEL_ACCESS_TOKEN: ${{ secrets.LINE_CHANNEL_ACCESS_TOKEN }}
+          LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
+          LINE_CHANNEL_SECRET: ${{ secrets.LINE_CHANNEL_SECRET }}
+        run: |
+          # 執行掃描並截圖 (前 50 大市值，避免截太多跑太久)
+          python daily_scanner.py --top 50 --min-patterns 2
+
+      - name: Upload Daily Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: stock-report-${{ github.run_id }}
+          path: |
+            daily_reports/
+            screenshots/

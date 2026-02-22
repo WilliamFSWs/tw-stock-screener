@@ -8,3 +8,5 @@ python-dotenv
 flask
 gunicorn
 line-bot-sdk
+selenium
+webdriver-manager
