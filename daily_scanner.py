@@ -200,14 +200,33 @@ def scan_today_signals(stock_id, stock_name=""):
 def run_daily_scan(stocks, min_patterns=1):
     """
     對所有股票執行每日掃描。
-
-    Args:
-        stocks: 股票清單 [{"code": "2330", "name": "台積電", ...}, ...]
-        min_patterns: 至少觸發幾個模式才列入推薦
-
-    Returns:
-        list: 觸發訊號的股票列表
     """
+    # 載入優化配置
+    best_patterns = []
+    if os.path.exists("best_patterns_config.json"):
+        with open("best_patterns_config.json", "r", encoding="utf-8") as f:
+            best_patterns = json.load(f).get("best_patterns", [])
+            if best_patterns:
+                print(f"💡 套用近期優化配置，優先關注模式: {', '.join(best_patterns[:3])}")
+
+    # 檢查大盤走勢 (TAIEX)
+    market_mood = "未知"
+    try:
+        taiex = yf.Ticker("^TWII").history(period="1y")
+        if not taiex.empty:
+            current_price = taiex['Close'].iloc[-1]
+            ma200 = taiex['Close'].rolling(window=200).mean().iloc[-1]
+            ma20 = taiex['Close'].rolling(window=20).mean().iloc[-1]
+            
+            if current_price > ma200 and current_price > ma20:
+                market_mood = "🔥 強勢多頭 (大盤站上均線)"
+            elif current_price < ma200 and current_price < ma20:
+                market_mood = "❄️ 弱勢熊市 (大盤跌破均線，需保守)"
+            else:
+                market_mood = "⚖️ 震盪整理"
+    except:
+        pass
+
     total = len(stocks)
     all_results = []
     errors = []
@@ -221,6 +240,10 @@ def run_daily_scan(stocks, min_patterns=1):
         if "error" in result:
             errors.append(result)
         else:
+            result["market_mood"] = market_mood
+            # 標記是否為「近期強勢模式」
+            if best_patterns:
+                result["is_optimized"] = any(p in best_patterns for p in result["triggered_patterns"])
             all_results.append(result)
 
         # API rate limit
@@ -239,6 +262,7 @@ def generate_buy_report(results, min_patterns, output_dir, today_str):
 
     print(f"\n{'='*70}")
     print(f"📊 {today_str} 每日買入訊號報告")
+    print(f"市場大盤走勢: {results[0].get('market_mood', '未知') if results else '未知'}")
     print(f"{'='*70}")
     print(f"掃描股票: {len(results)} 檔 | 最低模式數: {min_patterns}")
     print(f"觸發買入訊號: {len(triggered)} 檔")
@@ -363,8 +387,10 @@ def send_line_notification(results, today_str):
     line_bot_api = LineBotApi(token)
     
     triggered = [r for r in results if r["pattern_count"] >= 2]
+    market_mood = results[0].get("market_mood", "未知") if results else "未知"
+    
     if not triggered:
-        msg = f"📅 {today_str} 台股掃描完成\n今日無觸發強烈推薦訊號。"
+        msg = f"📅 {today_str} 台股掃描完成\n大盤走勢: {market_mood}\n今日無觸發強烈推薦訊號。"
         line_bot_api.push_message(user_id, TextSendMessage(text=msg))
         return
 
@@ -373,6 +399,7 @@ def send_line_notification(results, today_str):
     moderate = [r for r in triggered if r["pattern_count"] == 2]
     
     msg = f"📅 {today_str} 台股買入訊號報告\n"
+    msg += f"大盤走勢: {market_mood}\n"
     msg += f"--------------------\n"
     msg += f"🔥 強烈推薦: {len(strong)} 檔\n"
     for r in strong[:5]:
