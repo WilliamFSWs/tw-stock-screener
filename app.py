@@ -75,19 +75,51 @@ def callback():
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     user_text = event.message.text.strip().upper()
-    user_id = event.source.user_id
-    if user_text.isdigit() or (".TW" in user_text) or (".TWO" in user_text):
-        try:
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="🔍 正在抓取資料並分析中，請稍候……"))
-        except:
-            pass
-        result = analyze_stock(user_text)
-        line_bot_api.push_message(user_id, TextSendMessage(text=result))
-    else:
+    source_type = event.source.type  # 'user', 'group', or 'room'
+    
+    # 指令：取得 ID (可用於設定自動推播至群組)
+    if user_text == "ID":
+        source_id = ""
+        if source_type == 'user':
+            source_id = event.source.user_id
+        elif source_type == 'group':
+            source_id = event.source.group_id
+        elif source_type == 'room':
+            source_id = event.source.room_id
+        
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text="👋 您好！我是您的台股即時分析師。\n\n直接傳送股票代號給我，我會馬上進行技術分析！\n\n範例：傳送「2330」查詢台積電")
+            TextSendMessage(text=f"📌 您的 {source_type} ID 為：\n{source_id}")
         )
+        return
+
+    # 判斷是否為股票代號 (數字、.TW、.TWO)
+    is_stock_query = user_text.isdigit() or (".TW" in user_text) or (".TWO" in user_text)
+    
+    if is_stock_query:
+        # 由於分析可能超過 30 秒，先回傳處理中訊息
+        try:
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text="🔍 正在分析中，請稍候……"))
+        except:
+            pass
+        
+        result = analyze_stock(user_text)
+        
+        # 使用 push_message 將結果傳回原對話框
+        target_id = ""
+        if source_type == 'user': target_id = event.source.user_id
+        elif source_type == 'group': target_id = event.source.group_id
+        elif source_type == 'room': target_id = event.source.room_id
+        
+        if target_id:
+            line_bot_api.push_message(target_id, TextSendMessage(text=result))
+    else:
+        # 在群組內，若不是股票代號或 ID 指令，則不主動回話，避免干擾聊天
+        if source_type == 'user':
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="👋 您好！我是您的台股即時分析師。\n\n直接傳送股票代號給我，我會馬上進行技術分析！\n\n範例：傳送「2330」查詢台積電")
+            )
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
