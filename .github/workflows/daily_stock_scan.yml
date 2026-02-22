@@ -38,8 +38,8 @@ jobs:
           LINE_USER_ID: ${{ secrets.LINE_USER_ID }}
           LINE_CHANNEL_SECRET: ${{ secrets.LINE_CHANNEL_SECRET }}
         run: |
-          # 執行掃描並截圖 (前 50 大市值，避免截太多跑太久)
-          python daily_scanner.py --top 50 --min-patterns 2
+          # 執行掃描並截圖 (掃描前 500 大，僅截圖有訊號的股票以節省資源)
+          python daily_scanner.py --top 500 --min-patterns 2
 
       - name: Upload Daily Report
         uses: actions/upload-artifact@v4

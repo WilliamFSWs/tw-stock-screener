@@ -97,7 +97,7 @@ def run_optimization(top_n=50, lookback_months=6):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--top", type=int, default=50)
+    parser.add_argument("--top", type=int, default=100)
     parser.add_argument("--months", type=int, default=6)
     args = parser.parse_args()
     

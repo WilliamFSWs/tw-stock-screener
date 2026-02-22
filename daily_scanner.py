@@ -46,7 +46,7 @@ from pv_pattern_backtest import (
 # 股票清單
 # ============================================================
 
-def get_top_stocks(top_n=250):
+def get_top_stocks(top_n=500):
     """取得台股前 N 大市值股票。"""
     print("📡 取得上市公司資料...")
     shares_resp = requests.get(
@@ -446,8 +446,8 @@ def main():
     parser = argparse.ArgumentParser(
         description="每日台股買入訊號掃描器"
     )
-    parser.add_argument("--top", "-n", type=int, default=250,
-                        help="掃描前 N 大市值 (預設: 250)")
+    parser.add_argument("--top", "-n", type=int, default=500,
+                        help="掃描前 N 大市值 (預設: 500)")
     parser.add_argument("--min-patterns", "-m", type=int, default=1,
                         help="至少觸發幾個模式才推薦 (預設: 1)")
     parser.add_argument("--scan-only", action="store_true",
@@ -476,24 +476,28 @@ def main():
     # 取得股票清單
     stocks = get_top_stocks(args.top)
 
-    # 截圖
-    if not args.scan_only:
-        screenshot_dir = os.path.join("screenshots", today_str)
-        stock_ids = [f"{s['code']}.TW" for s in stocks]
-        screenshot_stocks(stock_ids, screenshot_dir, delay=args.delay)
-
-        if args.screenshot_only:
-            print(f"\n✅ 截圖完成！儲存於: {screenshot_dir}")
-            return
-
-    # 掃描訊號
+    # 1. 掃描訊號
     print(f"\n🔬 開始掃描買入訊號...")
     results, errors = run_daily_scan(stocks, args.min_patterns)
 
-    # 生成報告
+    # 2. 生成報告 (找出觸發訊號的股票)
     triggered = generate_buy_report(results, args.min_patterns, args.output_dir, today_str)
 
-    # 發送 LINE 通知
+    # 3. 截圖 (僅對觸發 ≥1 個模式的股票進行截圖)
+    if not args.scan_only:
+        triggered_stocks = [r["stock"] for r in triggered]
+        if triggered_stocks:
+            screenshot_dir = os.path.join("screenshots", today_str)
+            print(f"\n📸 對 {len(triggered_stocks)} 檔有訊號的股票進行截圖...")
+            screenshot_stocks(triggered_stocks, screenshot_dir, delay=args.delay)
+        else:
+            print("\n📸 今日無訊號，跳過截圖。")
+
+        if args.screenshot_only:
+            print(f"\n✅ 截圖完成！")
+            return
+
+    # 4. 發送 LINE 通知
     if not args.screenshot_only:
         send_line_notification(results, today_str)
 
