@@ -5,3 +5,6 @@ requests
 schedule
 pytz
 python-dotenv
+flask
+gunicorn
+line-bot-sdk
