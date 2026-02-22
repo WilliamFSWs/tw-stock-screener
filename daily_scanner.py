@@ -39,6 +39,7 @@ warnings.filterwarnings("ignore")
 
 from pv_pattern_backtest import (
     fetch_data, add_features, ALL_PATTERNS, get_formula_description,
+    calculate_win_rate_score
 )
 
 
@@ -179,6 +180,9 @@ def scan_today_signals(stock_id, stock_name=""):
         if signals.iloc[-1]:  # 最後一天觸發
             triggered.append(pattern_name)
 
+    # 計算預估勝率分數
+    win_rate_score = calculate_win_rate_score(df)
+
     # 取得關鍵指標
     info = {
         "stock": stock_id,
@@ -193,6 +197,7 @@ def scan_today_signals(stock_id, stock_name=""):
         "is_red": bool(last_row["is_red"]),
         "triggered_patterns": triggered,
         "pattern_count": len(triggered),
+        "win_rate_score": win_rate_score,
     }
     return info
 
@@ -258,7 +263,8 @@ def generate_buy_report(results, min_patterns, output_dir, today_str):
     """生成今日買入訊號報告。"""
     # 篩選觸發訊號的股票
     triggered = [r for r in results if r["pattern_count"] >= min_patterns]
-    triggered.sort(key=lambda x: x["pattern_count"], reverse=True)
+    # 先按勝率分數排，再按模式數
+    triggered.sort(key=lambda x: (x["win_rate_score"], x["pattern_count"]), reverse=True)
 
     print(f"\n{'='*70}")
     print(f"📊 {today_str} 每日買入訊號報告")
@@ -281,25 +287,25 @@ def generate_buy_report(results, min_patterns, output_dir, today_str):
 
     if strong:
         print(f"\n🔥 強烈推薦（≥3 個模式觸發）— {len(strong)} 檔：")
-        print(f"{'股票':>10} {'名稱':<8} {'收盤':>8} {'漲跌%':>6} {'RSI':>5} {'量比':>5} {'模式數':>5} 觸發模式")
-        print("-" * 85)
+        print(f"{'股票':>10} {'名稱':<8} {'收盤':>8} {'漲跌%':>6} {'RSI':>5} {'量比':>5} {'模式數':>5} {'勝率分':>6} 觸發模式")
+        print("-" * 95)
         for r in strong:
             patterns_str = ", ".join(r["triggered_patterns"])
             flag = "🔴" if not r["is_red"] else "🟢"
             print(f"{r['stock']:>10} {r['name']:<8} {r['close']:>8.2f} "
                   f"{r['pct_change']:>+5.1f}% {r['rsi14']:>5.1f} "
                   f"{r['volume_ratio_ma20']:>5.2f} {flag}{r['pattern_count']:>4} "
-                  f"{patterns_str}")
+                  f"{r['win_rate_score']:>6}% {patterns_str}")
 
     if moderate:
         print(f"\n⭐ 推薦（2 個模式觸發）— {len(moderate)} 檔：")
-        print(f"{'股票':>10} {'名稱':<8} {'收盤':>8} {'漲跌%':>6} {'RSI':>5} {'量比':>5} 觸發模式")
-        print("-" * 75)
+        print(f"{'股票':>10} {'名稱':<8} {'收盤':>8} {'漲跌%':>6} {'RSI':>5} {'量比':>5} {'勝率分':>6} 觸發模式")
+        print("-" * 85)
         for r in moderate:
             patterns_str = ", ".join(r["triggered_patterns"])
             print(f"{r['stock']:>10} {r['name']:<8} {r['close']:>8.2f} "
                   f"{r['pct_change']:>+5.1f}% {r['rsi14']:>5.1f} "
-                  f"{r['volume_ratio_ma20']:>5.2f} {patterns_str}")
+                  f"{r['volume_ratio_ma20']:>5.2f} {r['win_rate_score']:>6}% {patterns_str}")
 
     if watch and min_patterns <= 1:
         print(f"\n👀 觀察（1 個模式觸發）— {len(watch)} 檔：")
@@ -339,6 +345,7 @@ def generate_buy_report(results, min_patterns, output_dir, today_str):
             "MA20偏離%": f"{r['ma20_dev']:.1f}",
             "紅K": "是" if r["is_red"] else "否",
             "模式數": r["pattern_count"],
+            "勝率評分": f"{r['win_rate_score']}%",
             "觸發模式": "|".join(r["triggered_patterns"]),
         })
     pd.DataFrame(rows).to_csv(csv_path, index=False, encoding="utf-8-sig")
@@ -403,11 +410,11 @@ def send_line_notification(results, today_str):
     msg += f"--------------------\n"
     msg += f"🔥 強烈推薦: {len(strong)} 檔\n"
     for r in strong[:5]:
-        msg += f"• {r['stock']} {r['name']} ({r['pattern_count']}模式)\n"
+        msg += f"• {r['stock']} {r['name']} ({r['win_rate_score']}%)\n"
     
     msg += f"\n⭐ 推薦: {len(moderate)} 檔\n"
     for r in moderate[:5]:
-        msg += f"• {r['stock']} {r['name']}\n"
+        msg += f"• {r['stock']} {r['name']} ({r['win_rate_score']}%)\n"
     
     if len(triggered) > 10:
         msg += f"...\n(共 {len(triggered)} 檔觸發訊號)"

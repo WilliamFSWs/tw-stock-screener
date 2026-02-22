@@ -7,6 +7,7 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 from dotenv import load_dotenv
+from pv_pattern_backtest import add_features, calculate_win_rate_score
 
 load_dotenv()
 
@@ -46,8 +47,18 @@ def analyze_stock(ticker):
         elif rsi < 30: trend = "超賣區，可關注買點"
         elif close_price > bb_upper: trend = "突破布林上軌，短線壓力漸大"
         elif close_price < bb_lower: trend = "跌破布林下軌，短線支撐區"
+        # 計算新功能：預估勝率分數
+        # 先轉換 df 格式符合 pv_pattern_backtest
+        df_scored = df.copy().rename(columns={
+            "Open": "open", "High": "high", "Low": "low",
+            "Close": "close", "Volume": "volume",
+        })
+        df_scored = add_features(df_scored)
+        win_rate = calculate_win_rate_score(df_scored)
+
         msg = f"🔍 {display} 技術診斷報告\n"
         msg += f"--------------------\n"
+        msg += f"📈 預估勝率：{win_rate}%\n"
         msg += f"💰 最新股價：{close_price:.2f}\n"
         msg += f"📊 RSI 指標：{rsi:.2f}\n"
         msg += f"⬆️ 布林上軌：{bb_upper:.2f}\n"

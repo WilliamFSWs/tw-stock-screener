@@ -111,6 +111,13 @@ def add_features(df):
     rs = avg_gain / avg_loss
     d["rsi14"] = 100 - (100 / (1 + rs))
 
+    # 三線合一
+    d['Triple_Bull'] = (d['ma5'] > d['ma20']) & (d['ma20'] > d['ma60'])
+
+    # 波動率壓縮 (過去 60 天價格區間)
+    # (High.rolling(60).max() - Low.rolling(60).min()) / Close
+    d['price_range_60d'] = (d['high'].rolling(60).max() - d['low'].rolling(60).min()) / d['close']
+
     # 前一日量
     d["prev_volume"] = d["volume"].shift(1)
 
@@ -221,6 +228,57 @@ ALL_PATTERNS = {
     "P11_多頭排列紅K": pattern_above_ma_all,
     "P12_多頭回檔": pattern_pullback_in_uptrend,
 }
+
+
+# ============================================================
+# 勝率分數計算 (User Defined Logic)
+# ============================================================
+
+def calculate_win_rate_score(df):
+    """
+    輸入 DataFrame
+    輸出該標的之『預估勝率分數』(0-100)
+    """
+    if df.empty:
+        return 0
+        
+    latest = df.iloc[-1]
+    score = 0
+    
+    # 預先計算今日訊號
+    # 1. 地心引力 (Signal_Low_Suck) -> 對應 P01
+    is_low_suck = bool(pattern_volume_shrink_stable(df).iloc[-1])
+    
+    # 2. 能量爆發 (Signal_Breakout) -> 對應 P02
+    is_breakout = bool(pattern_volume_surge_red(df).iloc[-1])
+    
+    # 3. 均線扭力 (Signal_Reversal) -> 對應 P05
+    is_reversal = bool(pattern_consecutive_down_red(df).iloc[-1])
+    
+    # 計算分數
+    if is_low_suck:
+        score += 30
+    if is_breakout:
+        score += 40
+    if is_reversal:
+        score += 30
+        
+    # 額外紅利：如果股價當前在 MA60 之後，增加信心分 10 分
+    if latest['close'] > latest['ma60']:
+        score += 10
+        
+    # 額外判斷：三線合一
+    if latest['Triple_Bull']:
+        score += 15
+        
+    # 判斷過去 60 天的價格區間 (波動率是否壓縮)
+    if latest['price_range_60d'] < 0.15: # 如果 60 天波動不到 15%，代表築底極其紮實
+        score += 20
+        
+    # 確保總分最高 100
+    final_win_rate = min(score, 100)
+    
+    return final_win_rate
 
 
 # ============================================================
