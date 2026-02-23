@@ -9,3 +9,5 @@ gunicorn
 line-bot-sdk
 selenium
 webdriver-manager
+google-api-python-client
+google-auth
