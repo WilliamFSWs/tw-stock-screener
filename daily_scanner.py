@@ -111,7 +111,7 @@ def get_top_stocks(top_n=500):
 # 本地 K 線圖生成 (不再依賴 Selenium)
 # ============================================================
 
-def generate_local_kline_chart(stock_id, df, output_dir, triggered_patterns):
+def generate_local_kline_chart(stock_id, stock_name, df, output_dir, triggered_patterns):
     """
     使用 mplfinance 產生技術線圖並儲存。
     以加速 GitHub Actions 執行並避免 Selenium 崩潰。
@@ -144,7 +144,7 @@ def generate_local_kline_chart(stock_id, df, output_dir, triggered_patterns):
         mpf.make_addplot(buy_signals, type='scatter', markersize=200, marker='^', color='red')
     ]
 
-    title = f"{stock_id}\nSignals: {', '.join(triggered_patterns)}"
+    title = f"{stock_id} {stock_name}\nSignals: {', '.join(triggered_patterns)}"
     try:
         mpf.plot(plot_df, type='candle', volume=True, addplot=apds,
                  title=title, style=my_style, savefig=output_path, 
@@ -329,8 +329,21 @@ def generate_buy_report(results, min_patterns, output_dir, today_str):
     """生成今日買入訊號報告。"""
     # 篩選觸發訊號的股票
     triggered = [r for r in results if r["pattern_count"] >= min_patterns]
-    # 先按勝率分數排，再按模式數
-    triggered.sort(key=lambda x: (x["win_rate_score"], x["pattern_count"]), reverse=True)
+    # 計算綜合加權分數：模式數、勝率、期望值
+    for r in triggered:
+        best_ev = max(r.get("ev_stats", []), key=lambda x: x.get("Expected_Value(%)", -99), default={})
+        
+        ev_val = best_ev.get("Expected_Value(%)", -999)
+        wr_val = best_ev.get("Win_Rate(%)", 0)
+        
+        # 避免 N/A 造成計算錯誤
+        ev_score = float(ev_val) if ev_val != 'N/A' and ev_val != -999 else -50
+        wr_score = float(wr_val) if wr_val != 'N/A' else 0
+        
+        # 權重公式：模式數(每個20分) + 勝率(1%得1分) + 期望值(1%得2分)
+        r["ranking_score"] = (r["pattern_count"] * 20) + wr_score + (ev_score * 2)
+
+    triggered.sort(key=lambda x: x["ranking_score"], reverse=True)
 
     print(f"\n{'='*70}")
     print(f"📊 {today_str} 每日買入訊號報告")
@@ -417,11 +430,31 @@ def generate_buy_report(results, min_patterns, output_dir, today_str):
         avg_ret_val = best_ev.get('Avg_Return(%)', 'N/A')
         dd_val = best_ev.get('Max_Drawdown(%)', 'N/A')
         
+        # 轉換為實質價格
+        close_price = r["close"]
+        entry_price = close_price * 0.98  # 建議開盤或拉回 2% 接
+        
+        target_price = 'N/A'
+        target_pct = 'N/A'
+        stop_price = 'N/A'
+        stop_pct = 'N/A'
+        
+        if avg_ret_val != 'N/A':
+            target_pct = f"{avg_ret_val:.2f}%"
+            if avg_ret_val > 0:
+                target_price = f"{entry_price * (1 + (avg_ret_val / 100.0)):.2f}"
+            else:
+                target_price = "歷史勝率極差，建議換股觀察"
+            
+        if dd_val != 'N/A':
+            stop_pct = f"{dd_val:.2f}%"
+            stop_price = f"{entry_price * (1 + (dd_val / 100.0)):.2f}"
+        
         rows.append({
             "日期": r["date"],
             "股票": r["stock"],
             "名稱": r["name"],
-            "收盤價": r["close"],
+            "收盤價": close_price,
             "漲跌%": f"{r['pct_change']:.2f}",
             "RSI14": f"{r['rsi14']:.1f}",
             "量比MA20": f"{r['volume_ratio_ma20']:.2f}",
@@ -433,18 +466,15 @@ def generate_buy_report(results, min_patterns, output_dir, today_str):
             "歷史樣本數": samples_val,
             "最佳勝率": f"{wr_val}%" if wr_val != 'N/A' else 'N/A',
             "最佳期望值": f"{ev_val}%" if ev_val != 'N/A' else 'N/A',
-            "建議停利%": f"{avg_ret_val:.2f}%" if avg_ret_val != 'N/A' else 'N/A',
-            "建議停損%": f"{dd_val:.2f}%" if dd_val != 'N/A' else 'N/A',
+            "建議進場價": f"{entry_price:.2f}",
+            "建議停利價": target_price,
+            "建議停利%": target_pct,
+            "建議停損價": stop_price,
+            "建議停損%": stop_pct,
         })
     pd.DataFrame(rows).to_csv(csv_path, index=False, encoding="utf-8-sig")
     print(f"💾 CSV 已儲存: {csv_path}")
 
-    # 以期望值 (EV) 作為最終排序依據，如果是 N/A 則視為 -999，並挑出最強的
-    for r in triggered:
-        best_ev = max(r.get("ev_stats", []), key=lambda x: x.get("Expected_Value(%)", -99), default={})
-        r["best_ev_val"] = best_ev.get("Expected_Value(%)", -999)
-
-    triggered.sort(key=lambda x: (x["pattern_count"], x["best_ev_val"]), reverse=True)
     return triggered
 
 
@@ -491,8 +521,15 @@ def send_line_notification(results, today_str):
     
     for r in triggered:
         best_ev = max(r.get("ev_stats", []), key=lambda x: x.get("Expected_Value(%)", -99), default={})
-        r["best_ev_val"] = best_ev.get("Expected_Value(%)", -999)
-    triggered.sort(key=lambda x: (x["pattern_count"], x["best_ev_val"]), reverse=True)
+        ev_val = best_ev.get("Expected_Value(%)", -999)
+        wr_val = best_ev.get("Win_Rate(%)", 0)
+        
+        ev_score = float(ev_val) if ev_val != 'N/A' and ev_val != -999 else -50
+        wr_score = float(wr_val) if wr_val != 'N/A' else 0
+        
+        r["ranking_score"] = (r["pattern_count"] * 20) + wr_score + (ev_score * 2)
+
+    triggered.sort(key=lambda x: x["ranking_score"], reverse=True)
     
     market_mood = results[0].get("market_mood", "未知") if results else "未知"
     
@@ -501,15 +538,14 @@ def send_line_notification(results, today_str):
         line_bot_api.push_message(user_id, TextSendMessage(text=msg))
         return
 
-    # 彙總強烈推薦
-    strong = [r for r in triggered if r["pattern_count"] >= 3]
-    moderate = [r for r in triggered if r["pattern_count"] == 2]
+    top_10 = triggered[:10]
     
     msg = f"📅 {today_str} 台股買入訊號報告\n"
     msg += f"大盤走勢: {market_mood}\n"
     msg += f"--------------------\n"
+    msg += f"🏆 綜合加權排名前 10 檔:\n"
     
-    def format_stock_msg(r):
+    def format_stock_msg(r, rank):
         patterns = ", ".join(r['triggered_patterns'])
         ev_stats = r.get("ev_stats", [])
         if ev_stats:
@@ -520,25 +556,28 @@ def send_line_notification(results, today_str):
             ev = best.get("Expected_Value(%)", 0)
             signals = best.get("Total_Signals", 0)
             
-            s = f"📌 {r['stock']} {r['name']} (收 {r['close']})\n"
-            s += f"  💡 模式: {patterns}\n"
-            s += f"  📊 歷史勝率: {wr}% (樣本: {signals}次), 期望值: {ev}%\n"
-            s += f"  🎯 建議:\n"
-            s += f"   - 進場: 隔日開盤或拉回 -2% 內接刀\n"
-            s += f"   - 停損: 跌破進場價 {dd:.2f}% 即出\n"
-            s += f"   - 停利: 若站穩 5% 即分批出場, 最高可看 {avg_ret:.2f}%\n"
+            close_price = r['close']
+            entry = close_price * 0.98
+            stop = entry * (1 + (dd / 100.0))
+            
+            score_str = f"{r.get('ranking_score', 0):.1f}"
+            
+            s = f"🏅 Top {rank}: {r['stock']} {r['name']} (收 {close_price:.2f})\n"
+            s += f"  分數: {score_str} (模式:{r['pattern_count']} | 勝率:{wr}% | 期望值:{ev}%)\n"
+            s += f"  🎯 進: {entry:.2f} | 損: {stop:.2f}\n"
+            
+            if avg_ret > 0:
+                target = entry * (1 + (avg_ret / 100.0))
+                s += f"  💸 利: 站穩 {entry * 1.05:.2f} / 上看 {target:.2f}\n"
+            else:
+                s += f"  ⚠️ 利: 歷史獲利差，建議觀察\n"
+                
             return s
         else:
-            return f"📌 {r['stock']} {r['name']} (收 {r['close']})\n  💡 模式: {patterns}\n  ⚠️ 缺乏歷史回測資料\n"
+            return f"🏅 Top {rank}: {r['stock']} {r['name']} (收 {r['close']})\n  ⚠️ 缺乏歷史回測資料\n"
     
-    if strong:
-        msg += f"🔥 強烈推薦 (≥3個模式): {len(strong)} 檔\n"
-        for r in strong[:3]:
-            msg += format_stock_msg(r) + "\n"
-    elif moderate:
-        msg += f"⭐ 推薦 (2個模式): {len(moderate)} 檔\n"
-        for r in moderate[:3]:
-            msg += format_stock_msg(r) + "\n"
+    for i, r in enumerate(top_10, 1):
+        msg += format_stock_msg(r, i) + "\n"
     
     msg += f"--------------------\n"
     msg += "💡 詳細報告與 K 線圖請見 Google Drive。"
@@ -547,12 +586,12 @@ def send_line_notification(results, today_str):
     line_bot_api.push_message(user_id, TextSendMessage(text=msg))
     print("✅ LINE 摘要通知已發送")
 
-    # 發送截圖 (強烈推薦的前 3 檔)
+    # 發送截圖 (排名前 3 檔)
     imgur_client_id = os.getenv("IMGUR_CLIENT_ID")
-    if imgur_client_id and strong:
-        print("📸 正在上傳截圖到 Imgur 並發送到 LINE...")
+    if imgur_client_id and top_10:
+        print("📸 正在上傳前 3 名截圖到 Imgur 並發送到 LINE...")
         screenshot_dir = os.path.join("screenshots", today_str)
-        for r in strong[:3]:
+        for r in top_10[:3]:
             safe_code = r["stock"].replace(".", "_")
             img_path = os.path.join(screenshot_dir, f"{safe_code}_kline.png")
             
@@ -628,7 +667,7 @@ def main():
                 stock_id = r["stock"]
                 df = all_history_data.get(stock_id)
                 if df is not None and not df.empty:
-                    img_path = generate_local_kline_chart(stock_id, df, screenshot_dir, r['triggered_patterns'])
+                    img_path = generate_local_kline_chart(stock_id, r["name"], df, screenshot_dir, r['triggered_patterns'])
                     if img_path:
                         generated_images.append(img_path)
             
