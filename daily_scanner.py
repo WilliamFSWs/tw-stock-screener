@@ -152,62 +152,14 @@ def screenshot_stocks(stock_codes, output_dir, delay=2.0):
             pass
 
 
-# ============================================================
-# 訊號掃描
-# ============================================================
-
-def scan_today_signals(stock_id, stock_name=""):
-    """
-    掃描單檔股票今日是否觸發買入訊號。
-
-    Returns:
-        dict: 包含觸發的模式列表和詳細資訊
-    """
-    try:
-        df = fetch_data(stock_id, period="6mo")
-        df = add_features(df)
-    except Exception as e:
-        return {"stock": stock_id, "name": stock_name, "error": str(e)}
-
-    if df.empty:
-        return {"stock": stock_id, "name": stock_name, "error": "無資料"}
-
-    # 檢查最後一個交易日的訊號
-    last_row = df.iloc[-1]
-    last_date = df.index[-1].strftime("%Y-%m-%d")
-
-    triggered = []
-    for pattern_name, pattern_func in ALL_PATTERNS.items():
-        signals = pattern_func(df)
-        if signals.iloc[-1]:  # 最後一天觸發
-            triggered.append(pattern_name)
-
-    # 計算預估勝率分數
-    win_rate_score = calculate_win_rate_score(df)
-
-    # 取得關鍵指標
-    info = {
-        "stock": stock_id,
-        "name": stock_name,
-        "date": last_date,
-        "close": float(last_row["close"]),
-        "pct_change": float(last_row["pct_change"] * 100),
-        "volume_ratio_ma5": float(last_row["vol_ratio_ma5"]),
-        "volume_ratio_ma20": float(last_row["vol_ratio_ma20"]),
-        "rsi14": float(last_row["rsi14"]),
-        "ma20_dev": float(last_row["ma20_deviation"] * 100),
-        "is_red": bool(last_row["is_red"]),
-        "triggered_patterns": triggered,
-        "pattern_count": len(triggered),
-        "win_rate_score": win_rate_score,
-    }
-    return info
-
-
 def run_daily_scan(stocks, min_patterns=1):
     """
-    對所有股票執行每日掃描。
+    對所有股票執行每日掃描 (使用批次下載優化速度)。
     """
+    total = len(stocks)
+    all_results = []
+    errors = []
+    
     # 載入優化配置
     best_patterns = []
     if os.path.exists("best_patterns_config.json"):
@@ -233,11 +185,7 @@ def run_daily_scan(stocks, min_patterns=1):
                 market_mood = "⚖️ 震盪整理"
     except:
         pass
-
-    total = len(stocks)
-    all_results = []
-    errors = []
-    
+        
     # 載入歷史期望值資料 (若有)
     ev_df = None
     if os.path.exists("data/stock_ev_report.csv"):
@@ -251,21 +199,95 @@ def run_daily_scan(stocks, min_patterns=1):
     if os.path.exists("data/all_signals_raw.xlsx"):
         try:
             raw_df = pd.read_excel("data/all_signals_raw.xlsx")
-            # 轉換年份
             raw_df['Year'] = pd.to_datetime(raw_df['Date']).dt.year
         except:
             pass
 
+    # [優化] 批次下載所有股票資料
+    print(f"\n🚀 正在批次下載 {total} 檔股票歷史資料以加速掃描 (可能需要幾十秒)...")
+    tickers = [f"{s['code']}.TW" for s in stocks]
+    
+    # 為了避免 yfinance 請求過大被 ban 或漏資料，分批次下載 (每批 200 檔)
+    batch_size = 200
+    all_history_data = {}
+    
+    for i in range(0, len(tickers), batch_size):
+        batch_tickers = tickers[i:min(i+batch_size, len(tickers))]
+        sys.stdout.write(f"\r  下載批次 {i//batch_size + 1}/{(len(tickers)-1)//batch_size + 1}...")
+        sys.stdout.flush()
+        
+        try:
+            # yf.download 回傳 multi-index dataframe if multiple tickers
+            batch_str = " ".join(batch_tickers)
+            bulk_df = yf.download(batch_str, period="6mo", progress=False, group_by="ticker", auto_adjust=True)
+            
+            # 將 multi-index 拆回各股獨立 df
+            for ticker in batch_tickers:
+                if len(batch_tickers) == 1:
+                    stk_df = bulk_df.copy()
+                else:
+                    if ticker in bulk_df.columns.levels[0]:
+                        stk_df = bulk_df[ticker].copy()
+                    else:
+                        continue
+                
+                stk_df = stk_df.dropna(how="all")
+                if len(stk_df) > 20: # 確保資料夠多能算月線
+                    stk_df = stk_df.rename(columns={
+                        "Open": "open", "High": "high", "Low": "low",
+                        "Close": "close", "Volume": "volume"
+                    })
+                    all_history_data[ticker] = add_features(stk_df)
+        except Exception as e:
+            print(f"  ⚠️ 批次 {i} 下載失敗: {e}")
+            
+    print(f"\n✅ 成功取得 {len(all_history_data)} 檔股票之歷史資料，開始進行單機運算...")
+
     for i, stock in enumerate(stocks, 1):
         stock_id = f"{stock['code']}.TW"
-        sys.stdout.write(f"\r🔍 掃描中 [{i}/{total}] {stock_id} {stock['name']:<8}")
-        sys.stdout.flush()
+        
+        # 顯示進度
+        if i % 50 == 0 or i == total:
+            sys.stdout.write(f"\r🔍 運算中 [{i}/{total}]")
+            sys.stdout.flush()
+            
+        # 取得已快取的特徵資料
+        df = all_history_data.get(stock_id)
+        
+        if df is None or df.empty:
+            errors.append({"stock": stock_id, "name": stock['name'], "error": "無資料或不足"})
+            continue
+            
+        try:
+            # 檢查最後一個交易日的訊號
+            last_row = df.iloc[-1]
+            last_date = df.index[-1].strftime("%Y-%m-%d")
 
-        result = scan_today_signals(stock_id, stock['name'])
-        if "error" in result:
-            errors.append(result)
-        else:
-            result["market_mood"] = market_mood
+            triggered = []
+            for pattern_name, pattern_func in ALL_PATTERNS.items():
+                signals = pattern_func(df)
+                if signals.iloc[-1]:  # 最後一天觸發
+                    triggered.append(pattern_name)
+
+            win_rate_score = calculate_win_rate_score(df)
+
+            result = {
+                "stock": stock_id,
+                "name": stock['name'],
+                "date": last_date,
+                "close": float(last_row["close"]),
+                "pct_change": float(last_row["pct_change"] * 100),
+                "volume_ratio_ma5": float(last_row["vol_ratio_ma5"]),
+                "volume_ratio_ma20": float(last_row["vol_ratio_ma20"]),
+                "rsi14": float(last_row["rsi14"]),
+                "ma20_dev": float(last_row["ma20_deviation"] * 100),
+                "is_red": bool(last_row["is_red"]),
+                "triggered_patterns": triggered,
+                "pattern_count": len(triggered),
+                "win_rate_score": win_rate_score,
+                "market_mood": market_mood
+            }
+
             # 標記是否為「近期強勢模式」
             if best_patterns:
                 result["is_optimized"] = any(p in best_patterns for p in result["triggered_patterns"])
@@ -277,32 +299,25 @@ def run_daily_scan(stocks, min_patterns=1):
                     match = ev_df[(ev_df["Stock_ID"] == stock_id) & (ev_df["Pattern"] == p)]
                     if not match.empty:
                         stat_dict = match.iloc[0].to_dict()
-                        
-                        # 補充牛熊市勝率與樣本數
                         if raw_df is not None:
                             raw_match = raw_df[(raw_df["Stock_ID"] == stock_id) & (raw_df["Pattern"] == p)]
                             if not raw_match.empty:
                                 bull_years = [2021, 2023, 2024]
                                 bear_years = [2022]
-                                
                                 bull_signals = raw_match[raw_match['Year'].isin(bull_years)]
                                 bear_signals = raw_match[raw_match['Year'].isin(bear_years)]
-                                
                                 stat_dict['Bull_Win_Rate'] = (bull_signals['Is_Win'].mean() * 100) if len(bull_signals) > 0 else 0
                                 stat_dict['Bear_Win_Rate'] = (bear_signals['Is_Win'].mean() * 100) if len(bear_signals) > 0 else 0
                                 stat_dict['Bull_Signals'] = len(bull_signals)
                                 stat_dict['Bear_Signals'] = len(bear_signals)
-                        
                         ev_stats.append(stat_dict)
             result["ev_stats"] = ev_stats
             
             all_results.append(result)
+        except Exception as e:
+            errors.append({"stock": stock_id, "name": stock['name'], "error": str(e)})
 
-        # API rate limit
-        if i % 5 == 0:
-            time.sleep(0.5)
-
-    print(f"\r🔍 掃描完成！共 {len(all_results)} 檔成功，{len(errors)} 檔失敗" + " " * 30)
+    print(f"\n🔍 掃描完成！共 {len(all_results)} 檔成功，{len(errors)} 檔失敗" + " " * 30)
     return all_results, errors
 
 
