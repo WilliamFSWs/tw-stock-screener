@@ -1,0 +1,36 @@
+# Yahoo 台股技術線圖截圖工具
+
+- [x] 建立 `stock_screenshot.py` 腳本
+- [x] 更新 `requirements.txt`
+- [x] 安裝依賴並測試
+- [x] 驗證截圖結果
+- [x] 建立 `batch_screenshot_top250.py` 批量截圖腳本
+- [x] 執行前 250 大市值股票截圖
+- [x] 建立 `daily_scanner.py` 每日自動掃描系統
+- [x] 設定 GitHub Actions 自動排程
+- [x] 上傳所有程式碼至 GitHub 專案庫
+- [x] 建立 `reoptimize_patterns.py` 自動適配市場環境（熊/牛市）的優化工具
+- [x] 執行第 251~500 市值公司批量截圖與回測驗證
+    - [x] 251~500 批量截圖 (已完成: 250/250)
+    - [x] 中型股回測驗證 (確認模式一致性)
+- [x] 優化每日掃描流程（先掃描再截圖，支援 500 檔股票）
+- [x] 跨年度歷史回測驗證 (2021 牛市 ~ 2022 熊市)
+    - [x] 建立 `backtest_historical.py` 支援固定日期範圍
+    - [x] 驗證 2021-2022 勝率 (全數模式維持 > 90% 胜率)
+- [x] 開發歷史 K 線視覺化生成工具
+    - [x] 安裝 `mplfinance` 繪圖依賴
+    - [x] 撰寫 `generate_historical_chart.py` 支援 MA5/20/60 與成交量
+    - [x] 驗證歷史圖表生成功能 (測試合格)
+- [/] 建立全市場歷史數據庫 (2020~2025)
+    - [x] 撰寫 `bulk_historical_downloader.py` (支援分組與斷點續傳)
+    - [x] 下載 Group 1 (1-250)
+    - [x] 下載 Group 2 (251-500)
+    - [x] 下載 Group 3 (501-750)
+    - [x] 下載 Group 4 (751-1000)
+    - [x] 下載 Group 5 (1001+)
+- [x] 建立『預估勝率分數』演算法 (Win Rate Score)
+- [x] 優化回測進場邏輯 (D+1 進場 + 排除跳空)
+- [/] 全市場牛熊市性能大數據分析
+    - [/] 撰寫 `backtest_bull_bear_compare.py`
+    - [ ] 執行 2021 (牛) vs 2022 (熊) 全量回測
+    - [ ] 產生對比分析報告，更新至 Walkthrough
