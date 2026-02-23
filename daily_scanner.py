@@ -488,6 +488,12 @@ def send_line_notification(results, today_str):
     line_bot_api = LineBotApi(token)
     
     triggered = [r for r in results if r["pattern_count"] >= 2]
+    
+    for r in triggered:
+        best_ev = max(r.get("ev_stats", []), key=lambda x: x.get("Expected_Value(%)", -99), default={})
+        r["best_ev_val"] = best_ev.get("Expected_Value(%)", -999)
+    triggered.sort(key=lambda x: (x["pattern_count"], x["best_ev_val"]), reverse=True)
+    
     market_mood = results[0].get("market_mood", "未知") if results else "未知"
     
     if not triggered:
