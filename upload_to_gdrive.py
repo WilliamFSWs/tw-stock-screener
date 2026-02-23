@@ -23,7 +23,16 @@ def get_gdrive_service():
         creds_dict = json.loads(creds_json)
         
         scopes = ['https://www.googleapis.com/auth/drive.file']
-        credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+        
+        if "type" in creds_dict and creds_dict["type"] == "service_account":
+            # 這是原本的 Service Account 方式 (Google Workspace 共用雲端硬碟才有效)
+            from google.oauth2.service_account import Credentials as ServiceAccountCredentials
+            credentials = ServiceAccountCredentials.from_service_account_info(creds_dict, scopes=scopes)
+        else:
+            # 這是給個人版 Gmail 帳號的 OAuth Refresh Token 方式
+            from google.oauth2.credentials import Credentials as UserCredentials
+            credentials = UserCredentials.from_authorized_user_info(creds_dict, scopes=scopes)
+            
         service = build('drive', 'v3', credentials=credentials)
         return service
     except Exception as e:

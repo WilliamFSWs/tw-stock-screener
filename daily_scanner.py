@@ -119,6 +119,14 @@ def generate_local_kline_chart(stock_id, df, output_dir, triggered_patterns):
     
     import mplfinance as mpf
     
+    # 建立自訂樣式以支援中文顯示
+    # 涵蓋 Windows (正黑體), Mac (蘋方), Linux (Noto Sans CJK)
+    my_rc = {
+        'font.family': ['Microsoft JhengHei', 'PingFang TC', 'Noto Sans CJK TC', 'Noto Sans CJK JP', 'WenQuanYi Zen Hei', 'sans-serif'],
+        'axes.unicode_minus': False
+    }
+    my_style = mpf.make_mpf_style(base_mpf_style='yahoo', rc=my_rc)
+    
     # 標記買進訊號 (最後一天)
     buy_signals = np.full(len(plot_df), np.nan)
     buy_signals[-1] = plot_df['low'].iloc[-1] * 0.98
@@ -133,8 +141,9 @@ def generate_local_kline_chart(stock_id, df, output_dir, triggered_patterns):
     title = f"{stock_id}\nSignals: {', '.join(triggered_patterns)}"
     try:
         mpf.plot(plot_df, type='candle', volume=True, addplot=apds,
-                 title=title, style='yahoo', savefig=output_path, 
-                 warn_too_much_data=1000, returnfig=False, closefig=True)
+                 title=title, style=my_style, savefig=output_path, 
+                 warn_too_much_data=1000, returnfig=False, closefig=True,
+                 tight_layout=True, figratio=(12, 8))
         return output_path
     except Exception as e:
         print(f"  ⚠️ 產生 {stock_id} K線圖失敗: {e}")
