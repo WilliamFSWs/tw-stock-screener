@@ -48,3 +48,10 @@ jobs:
           path: |
             daily_reports/
             screenshots/
+
+      - name: Back up to Google Drive
+        env:
+          GCP_CREDENTIALS_B64: ${{ secrets.GCP_CREDENTIALS_B64 }}
+        run: |
+          # 執行上傳工具 (如果沒有設定 Secret 則會印出跳過)
+          python upload_to_gdrive.py
