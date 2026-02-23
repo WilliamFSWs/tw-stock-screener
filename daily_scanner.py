@@ -20,9 +20,11 @@ import json
 import os
 import sys
 import time
+import subprocess
 import traceback
 import warnings
-from datetime import datetime
+import shutil
+from datetime import datetime, timedelta
 
 import numpy as np
 import pandas as pd
@@ -577,15 +579,18 @@ def main():
     # 2. 生成報告 (找出觸發訊號的股票)
     triggered = generate_buy_report(results, args.min_patterns, args.output_dir, today_str)
 
-    # 3. 截圖 (僅對觸發 ≥1 個模式的股票進行截圖)
+    # 3. 截圖 (僅對強烈推薦或推薦的前 3 檔進行截圖, 節省空間)
     if not args.scan_only:
-        triggered_stocks = [r["stock"] for r in triggered]
+        # 只抓取前 3 名最佳的推薦股票來截圖
+        top_picks = [r for r in triggered if r["pattern_count"] >= 2]
+        triggered_stocks = [r["stock"] for r in top_picks[:3]]
+        
         if triggered_stocks:
             screenshot_dir = os.path.join("screenshots", today_str)
-            print(f"\n📸 對 {len(triggered_stocks)} 檔有訊號的股票進行截圖...")
+            print(f"\n📸 對 {len(triggered_stocks)} 檔最強訊號的股票進行截圖...")
             screenshot_stocks(triggered_stocks, screenshot_dir, delay=args.delay)
         else:
-            print("\n📸 今日無訊號，跳過截圖。")
+            print("\n📸 今日無強烈訊號，跳過截圖。")
 
         if args.screenshot_only:
             print(f"\n✅ 截圖完成！")
@@ -608,6 +613,23 @@ def main():
     print(f"\n✅ 掃描完成！")
     print(f"   推薦買入: {len([t for t in triggered if t['pattern_count'] >= 2])} 檔")
     print(f"   觀察名單: {len([t for t in triggered if t['pattern_count'] == 1])} 檔")
+
+
+    # 清理舊截圖以節省空間
+    print("\n🧹 清理 7 天前的舊截圖資料夾...")
+    try:
+        if os.path.exists("screenshots"):
+            import shutil
+            now = time.time()
+            for dir_name in os.listdir("screenshots"):
+                dir_path = os.path.join("screenshots", dir_name)
+                if os.path.isdir(dir_path):
+                    # 檢查資料夾建立時間，超過 7 天 (7*86400 秒) 則刪除
+                    if os.stat(dir_path).st_mtime < now - 7 * 86400:
+                        shutil.rmtree(dir_path)
+                        print(f"   🗑️ 已刪除過期截圖: {dir_name}")
+    except Exception as e:
+        print(f"   ⚠️ 清理舊截圖失敗: {e}")
 
 
 if __name__ == "__main__":
