@@ -19,6 +19,12 @@ import argparse
 import json
 import os
 import sys
+import io
+
+# 強制將標準輸出設為 UTF-8，避免 Windows終端機 遇到 Emoji 噴出 cp950 編碼錯誤
+if sys.stdout.encoding.lower() != 'utf-8':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+
 import time
 import subprocess
 import traceback
@@ -403,7 +409,14 @@ def generate_buy_report(results, min_patterns, output_dir, today_str):
     # 儲存 CSV
     csv_path = os.path.join(output_dir, f"buy_signals_{today_str}.csv")
     rows = []
-    for r in triggered:
+    for r in list(triggered):
+        best_ev = max(r.get("ev_stats", []), key=lambda x: x.get("Expected_Value(%)", -99), default={})
+        ev_val = best_ev.get('Expected_Value(%)', 'N/A')
+        wr_val = best_ev.get('Win_Rate(%)', 'N/A')
+        samples_val = best_ev.get('Signals', 'N/A')
+        avg_ret_val = best_ev.get('Avg_Return(%)', 'N/A')
+        dd_val = best_ev.get('Max_Drawdown(%)', 'N/A')
+        
         rows.append({
             "日期": r["date"],
             "股票": r["stock"],
@@ -415,12 +428,23 @@ def generate_buy_report(results, min_patterns, output_dir, today_str):
             "MA20偏離%": f"{r['ma20_dev']:.1f}",
             "紅K": "是" if r["is_red"] else "否",
             "模式數": r["pattern_count"],
-            "勝率評分": f"{r['win_rate_score']}%",
             "觸發模式": "|".join(r["triggered_patterns"]),
+            "舊版勝率評分": f"{r['win_rate_score']}%",
+            "歷史樣本數": samples_val,
+            "最佳勝率": f"{wr_val}%" if wr_val != 'N/A' else 'N/A',
+            "最佳期望值": f"{ev_val}%" if ev_val != 'N/A' else 'N/A',
+            "建議停利%": f"{avg_ret_val:.2f}%" if avg_ret_val != 'N/A' else 'N/A',
+            "建議停損%": f"{dd_val:.2f}%" if dd_val != 'N/A' else 'N/A',
         })
     pd.DataFrame(rows).to_csv(csv_path, index=False, encoding="utf-8-sig")
     print(f"💾 CSV 已儲存: {csv_path}")
 
+    # 以期望值 (EV) 作為最終排序依據，如果是 N/A 則視為 -999，並挑出最強的
+    for r in triggered:
+        best_ev = max(r.get("ev_stats", []), key=lambda x: x.get("Expected_Value(%)", -99), default={})
+        r["best_ev_val"] = best_ev.get("Expected_Value(%)", -999)
+
+    triggered.sort(key=lambda x: (x["pattern_count"], x["best_ev_val"]), reverse=True)
     return triggered
 
 
@@ -488,41 +512,30 @@ def send_line_notification(results, today_str):
             avg_ret = best.get("Avg_Return(%)", 0)
             dd = best.get("Max_Drawdown(%)", -7)
             ev = best.get("Expected_Value(%)", 0)
-            signals = best.get("Signals", 0)
-            
-            bull_wr = best.get("Bull_Win_Rate", 0)
-            bull_sig = best.get("Bull_Signals", 0)
-            bear_wr = best.get("Bear_Win_Rate", 0)
-            bear_sig = best.get("Bear_Signals", 0)
+            signals = best.get("Total_Signals", 0)
             
             s = f"📌 {r['stock']} {r['name']} (收 {r['close']})\n"
-            s += f"  模式: {patterns}\n"
+            s += f"  💡 模式: {patterns}\n"
             s += f"  📊 歷史勝率: {wr}% (樣本: {signals}次), 期望值: {ev}%\n"
-            if bull_sig > 0 or bear_sig > 0:
-                s += f"     牛市勝率: {bull_wr:.1f}% ({bull_sig}次) | 熊市(2022): {bear_wr:.1f}% ({bear_sig}次)\n"
             s += f"  🎯 建議:\n"
             s += f"   - 進場: 隔日開盤或拉回 -2% 內接刀\n"
-            s += f"   - 停損: 跌破進場價 {dd}% 即出\n"
-            s += f"   - 停利: 若站穩 5% 即分批出場, 最高可看 {avg_ret}%\n"
+            s += f"   - 停損: 跌破進場價 {dd:.2f}% 即出\n"
+            s += f"   - 停利: 若站穩 5% 即分批出場, 最高可看 {avg_ret:.2f}%\n"
             return s
         else:
-            return f"📌 {r['stock']} {r['name']} (收 {r['close']})\n  模式: {patterns}\n"
+            return f"📌 {r['stock']} {r['name']} (收 {r['close']})\n  💡 模式: {patterns}\n  ⚠️ 缺乏歷史回測資料\n"
     
     if strong:
         msg += f"🔥 強烈推薦 (≥3個模式): {len(strong)} 檔\n"
         for r in strong[:3]:
             msg += format_stock_msg(r) + "\n"
-    
-    if moderate:
+    elif moderate:
         msg += f"⭐ 推薦 (2個模式): {len(moderate)} 檔\n"
         for r in moderate[:3]:
             msg += format_stock_msg(r) + "\n"
     
-    if len(triggered) > 6:
-        msg += f"(其餘省略，共 {len(triggered)} 檔觸發訊號)\n"
-    
-    msg += f"\n--------------------\n"
-    msg += "💡 詳細報表請見 GitHub Artifacts。"
+    msg += f"--------------------\n"
+    msg += "💡 詳細報告與 K 線圖請見 Google Drive。"
 
     # 發送文字訊息
     line_bot_api.push_message(user_id, TextSendMessage(text=msg))
