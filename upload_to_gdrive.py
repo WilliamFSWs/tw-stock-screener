@@ -38,7 +38,14 @@ def create_folder(service, folder_name, parent_id=None):
         if parent_id:
             query += f" and '{parent_id}' in parents"
             
-        results = service.files().list(q=query, spaces='drive', fields='files(id, name)').execute()
+        # 加上 supportsAllDrives 解決 Service Account Quota 問題
+        results = service.files().list(
+            q=query, 
+            spaces='drive', 
+            fields='files(id, name)',
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True
+        ).execute()
         items = results.get('files', [])
         
         if items:
@@ -53,7 +60,11 @@ def create_folder(service, folder_name, parent_id=None):
         if parent_id:
             file_metadata['parents'] = [parent_id]
             
-        folder = service.files().create(body=file_metadata, fields='id').execute()
+        folder = service.files().create(
+            body=file_metadata, 
+            fields='id',
+            supportsAllDrives=True
+        ).execute()
         folder_id = folder.get('id')
         print(f"成功建立資料夾: {folder_name} (ID: {folder_id})")
         return folder_id
@@ -84,7 +95,12 @@ def upload_file(service, file_path, parent_id):
         
         media = MediaFileUpload(file_path, mimetype=mime_type, resumable=True)
         
-        file = service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        file = service.files().create(
+            body=file_metadata, 
+            media_body=media, 
+            fields='id',
+            supportsAllDrives=True
+        ).execute()
         print(f"  ✅ 成功上傳: {file_name} (ID: {file.get('id')})")
         return file.get('id')
     except Exception as e:
@@ -98,8 +114,11 @@ def main():
         
     print(f"開始執行 Google Drive 雲端備份作業...")
     
+    import pytz
+    tw_tz = pytz.timezone("Asia/Taipei")
+    
     # 建立今日日期資料夾
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    today_str = datetime.now(tw_tz).strftime("%Y-%m-%d")
     today_folder_id = create_folder(service, f"Daily_Report_{today_str}", parent_id=TARGET_FOLDER_ID)
     
     if not today_folder_id:

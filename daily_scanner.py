@@ -102,54 +102,43 @@ def get_top_stocks(top_n=500):
 
 
 # ============================================================
-# 截圖（呼叫 stock_screenshot.py）
+# 本地 K 線圖生成 (不再依賴 Selenium)
 # ============================================================
 
-def screenshot_stocks(stock_codes, output_dir, delay=2.0):
-    """批量截取股票 K 線圖。"""
-    from stock_screenshot import create_driver, screenshot_stock
-
+def generate_local_kline_chart(stock_id, df, output_dir, triggered_patterns):
+    """
+    使用 mplfinance 產生技術線圖並儲存。
+    以加速 GitHub Actions 執行並避免 Selenium 崩潰。
+    """
     os.makedirs(output_dir, exist_ok=True)
-    progress_file = os.path.join(output_dir, ".progress.json")
+    safe_name = stock_id.replace(".", "_")
+    output_path = os.path.join(output_dir, f"{safe_name}_kline.png")
+    
+    # 取最近 90 天畫圖即可
+    plot_df = df.tail(90).copy()
+    
+    import mplfinance as mpf
+    
+    # 標記買進訊號 (最後一天)
+    buy_signals = np.full(len(plot_df), np.nan)
+    buy_signals[-1] = plot_df['low'].iloc[-1] * 0.98
+    
+    apds = [
+        mpf.make_addplot(plot_df['ma5'], color='blue', width=1.0),
+        mpf.make_addplot(plot_df['ma20'], color='orange', width=1.0),
+        mpf.make_addplot(plot_df['ma60'], color='purple', width=1.0),
+        mpf.make_addplot(buy_signals, type='scatter', markersize=200, marker='^', color='red')
+    ]
 
-    # 載入進度
-    completed = set()
-    if os.path.exists(progress_file):
-        with open(progress_file) as f:
-            completed = set(json.load(f))
-
-    remaining = [c for c in stock_codes if c.replace(".TW", "") not in completed]
-    if not remaining:
-        print(f"  ✅ 所有截圖已完成")
-        return
-
-    print(f"📸 截取 K 線圖: {len(remaining)} 檔待處理...")
-    driver = create_driver()
-
+    title = f"{stock_id}\nSignals: {', '.join(triggered_patterns)}"
     try:
-        for i, stock_id in enumerate(remaining, 1):
-            try:
-                screenshot_stock(driver, stock_id, output_dir)
-                completed.add(stock_id.replace(".TW", ""))
-                with open(progress_file, "w") as f:
-                    json.dump(list(completed), f)
-            except Exception as e:
-                print(f"  ⚠️ {stock_id} 截圖失敗: {e}")
-                try:
-                    driver.quit()
-                except:
-                    pass
-                driver = create_driver()
-
-            if i < len(remaining):
-                time.sleep(delay)
-    except KeyboardInterrupt:
-        print(f"\n⚠️ 中斷，已完成 {len(completed)} 檔（可用 --resume 繼續）")
-    finally:
-        try:
-            driver.quit()
-        except:
-            pass
+        mpf.plot(plot_df, type='candle', volume=True, addplot=apds,
+                 title=title, style='yahoo', savefig=output_path, 
+                 warn_too_much_data=1000, returnfig=False, closefig=True)
+        return output_path
+    except Exception as e:
+        print(f"  ⚠️ 產生 {stock_id} K線圖失敗: {e}")
+        return None
 
 
 def run_daily_scan(stocks, min_patterns=1):
@@ -318,7 +307,7 @@ def run_daily_scan(stocks, min_patterns=1):
             errors.append({"stock": stock_id, "name": stock['name'], "error": str(e)})
 
     print(f"\n🔍 掃描完成！共 {len(all_results)} 檔成功，{len(errors)} 檔失敗" + " " * 30)
-    return all_results, errors
+    return all_results, errors, all_history_data
 
 
 def generate_buy_report(results, min_patterns, output_dir, today_str):
@@ -569,6 +558,8 @@ def main():
                         help="報告輸出目錄 (預設: ./daily_reports)")
     parser.add_argument("--delay", type=float, default=2.0,
                         help="截圖間隔秒數 (預設: 2.0)")
+    parser.add_argument("--max-charts", type=int, default=200,
+                        help="最多產生幾張技術線圖 (預設: 200)")
 
     args = parser.parse_args()
 
@@ -589,23 +580,52 @@ def main():
 
     # 1. 掃描訊號
     print(f"\n🔬 開始掃描買入訊號...")
-    results, errors = run_daily_scan(stocks, args.min_patterns)
+    results, errors, all_history_data = run_daily_scan(stocks, args.min_patterns)
 
     # 2. 生成報告 (找出觸發訊號的股票)
     triggered = generate_buy_report(results, args.min_patterns, args.output_dir, today_str)
 
-    # 3. 截圖 (僅對強烈推薦或推薦的前 3 檔進行截圖, 節省空間)
+    # 3. 截圖 (對所有強烈推薦或推薦的股票進行截圖，並合併為 PDF)
     if not args.scan_only:
-        # 只抓取前 3 名最佳的推薦股票來截圖
         top_picks = [r for r in triggered if r["pattern_count"] >= 2]
-        triggered_stocks = [r["stock"] for r in top_picks[:3]]
+        # 限制最大截圖數量
+        top_picks = top_picks[:args.max_charts]
         
-        if triggered_stocks:
+        if top_picks:
             screenshot_dir = os.path.join("screenshots", today_str)
-            print(f"\n📸 對 {len(triggered_stocks)} 檔最強訊號的股票進行截圖...")
-            screenshot_stocks(triggered_stocks, screenshot_dir, delay=args.delay)
+            print(f"\n📸 對 {len(top_picks)} 檔最強訊號的股票進行截圖並合併為 PDF...")
+            
+            generated_images = []
+            for r in top_picks:
+                stock_id = r["stock"]
+                df = all_history_data.get(stock_id)
+                if df is not None and not df.empty:
+                    img_path = generate_local_kline_chart(stock_id, df, screenshot_dir, r['triggered_patterns'])
+                    if img_path:
+                        generated_images.append(img_path)
+            
+            # 合併為 PDF
+            if generated_images:
+                try:
+                    from PIL import Image
+                    pdf_path = os.path.join(args.output_dir, f"Daily_Klines_{today_str}.pdf")
+                    
+                    # 讀取第一張圖片並轉換為 RGB (PDF 需要 RGB 模式)
+                    first_image = Image.open(generated_images[0]).convert('RGB')
+                    
+                    # 讀取剩餘圖片並轉換為 RGB
+                    other_images = []
+                    for img_path in generated_images[1:]:
+                        img = Image.open(img_path).convert('RGB')
+                        other_images.append(img)
+                        
+                    # 儲存為 PDF
+                    first_image.save(pdf_path, save_all=True, append_images=other_images)
+                    print(f"  📄 成功合併 {len(generated_images)} 張圖表至 PDF: {pdf_path}")
+                except Exception as e:
+                    print(f"  ⚠️ 合併 PDF 失敗: {e}")
         else:
-            print("\n📸 今日無強烈訊號，跳過截圖。")
+            print("\n📸 今日無推薦訊號，跳過截圖與 PDF 產生。")
 
         if args.screenshot_only:
             print(f"\n✅ 截圖完成！")
@@ -616,14 +636,10 @@ def main():
         send_line_notification(results, today_str)
 
     # 顯示對應截圖位置
-    if not args.scan_only and triggered:
-        screenshot_dir = os.path.join("screenshots", today_str)
-        print(f"\n📸 對應截圖位置:")
-        for r in [t for t in triggered if t["pattern_count"] >= 2][:10]:
-            code = r["stock"].replace(".TW", "_TW")
-            img = os.path.join(screenshot_dir, f"{code}_kline.png")
-            exists = "✅" if os.path.exists(img) else "❌"
-            print(f"  {exists} {r['stock']} → {img}")
+    if not args.scan_only and top_picks:
+        pdf_path = os.path.join(args.output_dir, f"Daily_Klines_{today_str}.pdf")
+        if os.path.exists(pdf_path):
+            print(f"\n📸 本日 K 線圖彙總報告：\n  ✅ {pdf_path}")
 
     print(f"\n✅ 掃描完成！")
     print(f"   推薦買入: {len([t for t in triggered if t['pattern_count'] >= 2])} 檔")
