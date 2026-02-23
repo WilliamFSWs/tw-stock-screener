@@ -1,6 +1,6 @@
 import yfinance as yf
 import pandas as pd
-import pandas_ta as ta
+from ta_utils import add_rsi, add_bbands, add_macd
 import requests
 import schedule
 import time
@@ -77,9 +77,9 @@ def check_stock_signals(ticker):
         if df.empty or len(df) < 50:
                       return None
 
-        df.ta.rsi(length=14, append=True)
-        df.ta.macd(fast=12, slow=26, signal=9, append=True)
-        df.ta.bbands(length=20, std=2, append=True)
+        df = add_rsi(df, length=14)
+        df = add_macd(df, fast=12, slow=26, signal=9)
+        df = add_bbands(df, length=20, std=2.0)
 
         latest = df.iloc[-1]
 

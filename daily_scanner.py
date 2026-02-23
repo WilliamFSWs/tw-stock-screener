@@ -51,7 +51,7 @@ def get_top_stocks(top_n=500):
     """取得台股前 N 大市值股票。"""
     print("📡 取得上市公司資料...")
     shares_resp = requests.get(
-        "https://openapi.twse.com.tw/v1/opendata/t187ap03_L", timeout=30
+        "https://openapi.twse.com.tw/v1/opendata/t187ap03_L", timeout=30, verify=False
     )
     shares_resp.raise_for_status()
     shares_data = shares_resp.json()
@@ -69,7 +69,7 @@ def get_top_stocks(top_n=500):
 
     print("📡 取得最新收盤價...")
     price_resp = requests.get(
-        "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL", timeout=30
+        "https://openapi.twse.com.tw/v1/exchangeReport/STOCK_DAY_ALL", timeout=30, verify=False
     )
     price_resp.raise_for_status()
     price_data = price_resp.json()
@@ -235,6 +235,24 @@ def run_daily_scan(stocks, min_patterns=1):
     total = len(stocks)
     all_results = []
     errors = []
+    
+    # 載入歷史期望值資料 (若有)
+    ev_df = None
+    if os.path.exists("data/stock_ev_report.csv"):
+        try:
+            ev_df = pd.read_csv("data/stock_ev_report.csv")
+        except:
+            pass
+            
+    # 載入原始訊號資料以計算牛熊市勝率 (若有)
+    raw_df = None
+    if os.path.exists("data/all_signals_raw.xlsx"):
+        try:
+            raw_df = pd.read_excel("data/all_signals_raw.xlsx")
+            # 轉換年份
+            raw_df['Year'] = pd.to_datetime(raw_df['Date']).dt.year
+        except:
+            pass
 
     for i, stock in enumerate(stocks, 1):
         stock_id = f"{stock['code']}.TW"
@@ -249,6 +267,33 @@ def run_daily_scan(stocks, min_patterns=1):
             # 標記是否為「近期強勢模式」
             if best_patterns:
                 result["is_optimized"] = any(p in best_patterns for p in result["triggered_patterns"])
+                
+            # 加上期望值與歷史回測資料
+            ev_stats = []
+            if ev_df is not None:
+                for p in result["triggered_patterns"]:
+                    match = ev_df[(ev_df["Stock_ID"] == stock_id) & (ev_df["Pattern"] == p)]
+                    if not match.empty:
+                        stat_dict = match.iloc[0].to_dict()
+                        
+                        # 補充牛熊市勝率與樣本數
+                        if raw_df is not None:
+                            raw_match = raw_df[(raw_df["Stock_ID"] == stock_id) & (raw_df["Pattern"] == p)]
+                            if not raw_match.empty:
+                                bull_years = [2021, 2023, 2024]
+                                bear_years = [2022]
+                                
+                                bull_signals = raw_match[raw_match['Year'].isin(bull_years)]
+                                bear_signals = raw_match[raw_match['Year'].isin(bear_years)]
+                                
+                                stat_dict['Bull_Win_Rate'] = (bull_signals['Is_Win'].mean() * 100) if len(bull_signals) > 0 else 0
+                                stat_dict['Bear_Win_Rate'] = (bear_signals['Is_Win'].mean() * 100) if len(bear_signals) > 0 else 0
+                                stat_dict['Bull_Signals'] = len(bull_signals)
+                                stat_dict['Bear_Signals'] = len(bear_signals)
+                        
+                        ev_stats.append(stat_dict)
+            result["ev_stats"] = ev_stats
+            
             all_results.append(result)
 
         # API rate limit
@@ -292,10 +337,16 @@ def generate_buy_report(results, min_patterns, output_dir, today_str):
         for r in strong:
             patterns_str = ", ".join(r["triggered_patterns"])
             flag = "🔴" if not r["is_red"] else "🟢"
+            
+            # 從 ev_stats 取得最佳勝率或期望值
+            best_ev = max(r.get("ev_stats", []), key=lambda x: x.get("Expected_Value(%)", -99), default={})
+            ev_str = f"{best_ev.get('Expected_Value(%)', 0):>5.1f}%" if best_ev else "  N/A"
+            wr_str = f"{best_ev.get('Win_Rate(%)', 0):>4.1f}%" if best_ev else " N/A"
+            
             print(f"{r['stock']:>10} {r['name']:<8} {r['close']:>8.2f} "
                   f"{r['pct_change']:>+5.1f}% {r['rsi14']:>5.1f} "
                   f"{r['volume_ratio_ma20']:>5.2f} {flag}{r['pattern_count']:>4} "
-                  f"{r['win_rate_score']:>6}% {patterns_str}")
+                  f"EV:{ev_str} WR:{wr_str} {patterns_str}")
 
     if moderate:
         print(f"\n⭐ 推薦（2 個模式觸發）— {len(moderate)} 檔：")
@@ -303,9 +354,13 @@ def generate_buy_report(results, min_patterns, output_dir, today_str):
         print("-" * 85)
         for r in moderate:
             patterns_str = ", ".join(r["triggered_patterns"])
+            best_ev = max(r.get("ev_stats", []), key=lambda x: x.get("Expected_Value(%)", -99), default={})
+            ev_str = f"{best_ev.get('Expected_Value(%)', 0):>5.1f}%" if best_ev else "  N/A"
+            wr_str = f"{best_ev.get('Win_Rate(%)', 0):>4.1f}%" if best_ev else " N/A"
+            
             print(f"{r['stock']:>10} {r['name']:<8} {r['close']:>8.2f} "
                   f"{r['pct_change']:>+5.1f}% {r['rsi14']:>5.1f} "
-                  f"{r['volume_ratio_ma20']:>5.2f} {r['win_rate_score']:>6}% {patterns_str}")
+                  f"{r['volume_ratio_ma20']:>5.2f} EV:{ev_str} WR:{wr_str} {patterns_str}")
 
     if watch and min_patterns <= 1:
         print(f"\n👀 觀察（1 個模式觸發）— {len(watch)} 檔：")
@@ -408,16 +463,48 @@ def send_line_notification(results, today_str):
     msg = f"📅 {today_str} 台股買入訊號報告\n"
     msg += f"大盤走勢: {market_mood}\n"
     msg += f"--------------------\n"
-    msg += f"🔥 強烈推薦: {len(strong)} 檔\n"
-    for r in strong[:5]:
-        msg += f"• {r['stock']} {r['name']} ({r['win_rate_score']}%)\n"
     
-    msg += f"\n⭐ 推薦: {len(moderate)} 檔\n"
-    for r in moderate[:5]:
-        msg += f"• {r['stock']} {r['name']} ({r['win_rate_score']}%)\n"
+    def format_stock_msg(r):
+        patterns = ", ".join(r['triggered_patterns'])
+        ev_stats = r.get("ev_stats", [])
+        if ev_stats:
+            best = max(ev_stats, key=lambda x: x.get("Expected_Value(%)", -99))
+            wr = best.get("Win_Rate(%)", 0)
+            avg_ret = best.get("Avg_Return(%)", 0)
+            dd = best.get("Max_Drawdown(%)", -7)
+            ev = best.get("Expected_Value(%)", 0)
+            signals = best.get("Signals", 0)
+            
+            bull_wr = best.get("Bull_Win_Rate", 0)
+            bull_sig = best.get("Bull_Signals", 0)
+            bear_wr = best.get("Bear_Win_Rate", 0)
+            bear_sig = best.get("Bear_Signals", 0)
+            
+            s = f"📌 {r['stock']} {r['name']} (收 {r['close']})\n"
+            s += f"  模式: {patterns}\n"
+            s += f"  📊 歷史勝率: {wr}% (樣本: {signals}次), 期望值: {ev}%\n"
+            if bull_sig > 0 or bear_sig > 0:
+                s += f"     牛市勝率: {bull_wr:.1f}% ({bull_sig}次) | 熊市(2022): {bear_wr:.1f}% ({bear_sig}次)\n"
+            s += f"  🎯 建議:\n"
+            s += f"   - 進場: 隔日開盤或拉回 -2% 內接刀\n"
+            s += f"   - 停損: 跌破進場價 {dd}% 即出\n"
+            s += f"   - 停利: 若站穩 5% 即分批出場, 最高可看 {avg_ret}%\n"
+            return s
+        else:
+            return f"📌 {r['stock']} {r['name']} (收 {r['close']})\n  模式: {patterns}\n"
     
-    if len(triggered) > 10:
-        msg += f"...\n(共 {len(triggered)} 檔觸發訊號)"
+    if strong:
+        msg += f"🔥 強烈推薦 (≥3個模式): {len(strong)} 檔\n"
+        for r in strong[:3]:
+            msg += format_stock_msg(r) + "\n"
+    
+    if moderate:
+        msg += f"⭐ 推薦 (2個模式): {len(moderate)} 檔\n"
+        for r in moderate[:3]:
+            msg += format_stock_msg(r) + "\n"
+    
+    if len(triggered) > 6:
+        msg += f"(其餘省略，共 {len(triggered)} 檔觸發訊號)\n"
     
     msg += f"\n--------------------\n"
     msg += "💡 詳細報表請見 GitHub Artifacts。"

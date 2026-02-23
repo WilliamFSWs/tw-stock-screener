@@ -127,13 +127,12 @@ def add_features(df):
     # 過濾條件: 如果 D+1 開盤價 > D+0 收盤價 (跳空向上)，則不計入回測 (不算數)
     d["can_enter"] = d["entry_buy_price"] <= d["close"]
     
-    # 7日後最高價 & 收盤價（從 D+1 起算 7 個交易日）
-    d["future_max_7d"] = d["high"].shift(-1).rolling(7).max().shift(-6)
-    d["future_close_7d"] = d["close"].shift(-7)
+    # 60日後最高價 & 收盤價（從 D+1 起算 60 個交易日）
+    d["future_max_60d"] = d["high"].shift(-1).rolling(60, min_periods=10).max().shift(-59)
+    d["future_close_60d"] = d["close"].shift(-60)
     
-    # 計算報酬率 (以 D+1 的買入價為分母)
-    d["future_return_7d"] = (d["future_close_7d"] - d["entry_buy_price"]) / d["entry_buy_price"]
-    d["future_max_return_7d"] = (d["future_max_7d"] - d["entry_buy_price"]) / d["entry_buy_price"]
+    # 基本參考報酬率 (60日後)
+    d["future_return_60d"] = (d["future_close_60d"] - d["entry_buy_price"]) / d["entry_buy_price"]
 
     return d.dropna(subset=["ma20", "vol_ma20", "rsi14"])
 
@@ -304,7 +303,8 @@ def backtest_pattern(df, pattern_func, pattern_name):
     signals = pattern_func(d)
 
     # 確保有 future 資料且符合「非跳空向上」的買入條件 (D+1 Open <= D+0 Close)
-    valid = signals & d["can_enter"] & d["future_max_7d"].notna() & d["future_close_7d"].notna()
+    # 使用 60 天的資料判定
+    valid = signals & d["can_enter"] & d["future_max_60d"].notna()
     signal_dates = d[valid].index
 
     if len(signal_dates) == 0:
@@ -319,22 +319,99 @@ def backtest_pattern(df, pattern_func, pattern_name):
             "max_drawdown": 0,
         }
 
-    signal_data = d.loc[signal_dates]
+    wins_3_times = 0
+    total_signals = len(signal_dates)
+    returns_60d = []
+    
+    yearly_stats = {}
+    signal_details = []
 
-    # 勝率（7日內最高價 > 買入收盤價）
-    wins_max = (signal_data["future_max_return_7d"] > 0).sum()
-    # 勝率（7日後收盤價 > 買入收盤價）
-    wins_close = (signal_data["future_return_7d"] > 0).sum()
+    for dt in signal_dates:
+        year = dt.year
+        if year not in yearly_stats:
+            yearly_stats[year] = {"wins_3_times": 0, "signals": 0, "returns_60d": []}
+            
+        yearly_stats[year]["signals"] += 1
+            
+        entry_price = float(d.loc[dt, "entry_buy_price"])
+        ipos = d.index.get_loc(dt)
+        # 未來 60 天的高點列表
+        future_highs = d["high"].iloc[ipos+1 : ipos+61]
+        target_price = entry_price * 1.05
+        
+        # 判斷每天最高價是否大於 5% 獲利目標
+        above_target = future_highs > target_price
+        
+        # 計算突破 5% 的「波段次數」：每次從未過目標漲過目標，算一次新波段
+        is_new_wave = above_target & ~above_target.shift(1, fill_value=False)
+        wave_count = is_new_wave.sum()
+        
+        # 條件 1：突破 5% 後掉下來，且又重新突破，反覆發生 >= 3 次
+        # 條件 2：雖然沒有 3 個波段，但一直在高檔 (定義為 60 天內累積超過 10 天最高價 > 1.05 * 入場價)
+        is_win = False
+        if wave_count >= 3 or above_target.sum() >= 10:
+            is_win = True
+            wins_3_times += 1
+            yearly_stats[year]["wins_3_times"] += 1
+            
+        future_close_60d = d.loc[dt, "future_close_60d"]
+        ret = 0
+        if pd.notna(future_close_60d):
+            ret = float((future_close_60d - entry_price) / entry_price)
+            returns_60d.append(ret)
+            yearly_stats[year]["returns_60d"].append(ret)
+            
+        # 計算過程中的最大跌幅 (Max Drawdown) 和期間最高價
+        min_price_60d = float(d["low"].iloc[ipos+1 : ipos+61].min())
+        max_price_60d = float(future_highs.max())
+        
+        drawdown = (min_price_60d - entry_price) / entry_price
+        max_ret = (max_price_60d - entry_price) / entry_price
+        
+        yearly_stats[year].setdefault("drawdowns", []).append(drawdown)
+        
+        # 紀錄詳細單筆交易資料
+        signal_details.append({
+            "Date": dt.strftime("%Y-%m-%d"),
+            "Entry_Price": round(entry_price, 2),
+            "Max_Return(%)": round(max_ret * 100, 2),
+            "Max_Drawdown(%)": round(drawdown * 100, 2),
+            "Return_60D(%)": round(ret * 100, 2),
+            "Is_Win": is_win
+        })
+
+    avg_60d_return = (np.mean(returns_60d) * 100) if returns_60d else 0
+    win_rate = (wins_3_times / total_signals) * 100
+    
+    # 計算整體的平均最大跌幅 (用來衡量承受多大風險)
+    all_drawdowns = []
+    
+    yearly_results = {}
+    for year, stats in yearly_stats.items():
+        if stats["signals"] > 0:
+            avg_dd = (np.mean(stats["drawdowns"]) * 100) if stats.get("drawdowns") else 0
+            all_drawdowns.extend(stats.get("drawdowns", []))
+            
+            yearly_results[year] = {
+                "signals": stats["signals"],
+                "win_rate": (stats["wins_3_times"] / stats["signals"]) * 100,
+                "avg_return": (np.mean(stats["returns_60d"]) * 100) if stats["returns_60d"] else 0,
+                "avg_drawdown": avg_dd
+            }
+            
+    avg_max_drawdown = (np.mean(all_drawdowns) * 100) if all_drawdowns else 0
 
     return {
         "pattern": pattern_name,
-        "signals": len(signal_dates),
-        "win_rate_max": wins_max / len(signal_dates) * 100,
-        "win_rate_close": wins_close / len(signal_dates) * 100,
-        "avg_max_return": signal_data["future_max_return_7d"].mean() * 100,
-        "avg_close_return": signal_data["future_return_7d"].mean() * 100,
-        "median_close_return": signal_data["future_return_7d"].median() * 100,
-        "max_drawdown": signal_data["future_return_7d"].min() * 100,
+        "signals": total_signals,
+        "win_rate_max": win_rate,     # 保留這個欄位以相容舊有報表，實際上是 60天內≥3次>5% 的勝率
+        "win_rate_close": win_rate,
+        "avg_max_return": 0,
+        "avg_close_return": avg_60d_return, # 60 天後的平均報酬
+        "median_close_return": 0,
+        "max_drawdown": avg_max_drawdown,
+        "yearly_stats": yearly_results,
+        "signal_details": signal_details
     }
 
 

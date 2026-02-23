@@ -1,7 +1,7 @@
 import os
 import yfinance as yf
 import pandas as pd
-import pandas_ta as ta
+from ta_utils import add_rsi, add_bbands
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
@@ -31,8 +31,8 @@ def analyze_stock(ticker):
         df = stock.history(period="6mo")
         if df.empty or len(df) < 50:
             return f"找不到 '{original_input}' 的股票資料，請確認代號是否正確。台股格式範例：2330"
-        df.ta.rsi(length=14, append=True)
-        df.ta.bbands(length=20, std=2, append=True)
+        df = add_rsi(df, length=14)
+        df = add_bbands(df, length=20, std=2.0)
         latest = df.iloc[-1]
         close_price = latest['Close']
         rsi = latest['RSI_14']

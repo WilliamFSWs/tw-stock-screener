@@ -1,6 +1,6 @@
 import yfinance as yf
 import pandas as pd
-import pandas_ta as ta
+from ta_utils import add_rsi, add_bbands, add_macd
 import requests
 import schedule
 import time
@@ -130,11 +130,11 @@ def check_stock_signals(ticker):
             
         # 計算技術指標
         # 1. RSI (14)
-        df.ta.rsi(length=14, append=True)
+        df = add_rsi(df, length=14)
         # 2. MACD (12, 26, 9)
-        df.ta.macd(fast=12, slow=26, signal=9, append=True)
+        df = add_macd(df, fast=12, slow=26, signal=9)
         # 3. Bollinger Bands (20, 2)
-        df.ta.bbands(length=20, std=2, append=True)
+        df = add_bbands(df, length=20, std=2.0)
         
         # 取得最後一筆資料 (即時股價或最新收盤價)
         latest = df.iloc[-1]
